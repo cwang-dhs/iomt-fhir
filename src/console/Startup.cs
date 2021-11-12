@@ -10,6 +10,7 @@ using DevLab.JmesPath;
 using Microsoft.Azure.WebJobs;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using Microsoft.Health.Common.Storage;
 using Microsoft.Health.Events.Common;
 using Microsoft.Health.Events.EventCheckpointing;
@@ -150,16 +151,15 @@ namespace Microsoft.Health.Fhir.Ingest.Console
             return new EventConsumerService(eventConsumers, logger);
         }
 
-        public virtual IEnumerableAsyncCollector<IMeasurement> ResolveEventCollector(IServiceProvider serviceProvider)
+        public virtual IAsyncCollector<IMeasurement> ResolveEventCollector(IServiceProvider serviceProvider)
         {
             var eventHubProducerOptions = new EventHubClientOptions();
             Configuration.GetSection("NormalizationEventHub").Bind(eventHubProducerOptions);
 
             var eventHubProducerFactory = serviceProvider.GetRequiredService<IEventProducerClientFactory>();
             var eventHubProducerClient = eventHubProducerFactory.GetEventHubProducerClient(eventHubProducerOptions);
-            var logger = serviceProvider.GetRequiredService<ITelemetryLogger>();
 
-            return new MeasurementToEventMessageAsyncCollector(new EventHubProducerService(eventHubProducerClient), new HashCodeFactory(), logger);
+            return new MeasurementToEventMessageAsyncCollector(new EventHubProducerService(eventHubProducerClient));
         }
 
         public virtual EventProcessorClient ResolveEventProcessorClient(IServiceProvider serviceProvider)
