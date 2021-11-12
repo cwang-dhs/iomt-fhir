@@ -4,6 +4,7 @@
 // -------------------------------------------------------------------------------------------------
 
 using System;
+using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Threading;
@@ -16,6 +17,7 @@ using Microsoft.Health.Common;
 using Microsoft.Health.Common.Auth;
 using Microsoft.Health.Common.Telemetry;
 using Microsoft.Health.Extensions.Fhir.Config;
+using Microsoft.Health.Extensions.Fhir.Telemetry.Exceptions;
 using Microsoft.Health.Extensions.Fhir.Telemetry.Metrics;
 using Microsoft.Health.Extensions.Host.Auth;
 using Microsoft.Health.Logging.Telemetry;
@@ -27,6 +29,8 @@ namespace Microsoft.Health.Extensions.Fhir
         private readonly bool _useManagedIdentity = false;
         private readonly IAzureCredentialProvider _tokenCredentialProvider;
         private readonly ITelemetryLogger _logger;
+        private static readonly FhirServiceExceptionTelemetryProcessor _exceptionTelemetryProcessor = new FhirServiceExceptionTelemetryProcessor();
+        private static readonly string _errorType = ErrorType.FHIRServerError;
 
         public FhirClientFactory(IOptions<FhirClientFactoryOptions> options, ITelemetryLogger logger)
             : this(EnsureArg.IsNotNull(options, nameof(options)).Value.UseManagedIdentity, logger)
@@ -66,6 +70,8 @@ namespace Microsoft.Health.Extensions.Fhir
         {
             var url = Environment.GetEnvironmentVariable("FhirService:Url");
             EnsureArg.IsNotNullOrEmpty(url, nameof(url));
+            ValidateFhirServiceUrl(url, logger);
+
             var uri = new Uri(url);
 
             EnsureArg.IsNotNull(tokenCredential, nameof(tokenCredential));
@@ -76,6 +82,7 @@ namespace Microsoft.Health.Extensions.Fhir
             };
 
             var client = new FhirClient(url, fhirClientSettings, new BearerTokenAuthorizationMessageHandler(uri, tokenCredential, logger));
+            ValidateFhirService(client, logger);
 
             return client;
         }
@@ -88,6 +95,81 @@ namespace Microsoft.Health.Extensions.Fhir
         private static FhirClient CreateConfidentialApplicationClient(ITelemetryLogger logger)
         {
             return CreateClient(new OAuthConfidentialClientAuthService(), logger);
+        }
+
+        private static void ValidateFhirServiceUrl(string url, ITelemetryLogger logger)
+        {
+            using (HttpClient client = new HttpClient())
+            {
+                try
+                {
+                    var response = client.GetAsync(url).Result;
+
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        var statusCode = response.StatusCode;
+                        string message;
+                        Exception customEx;
+
+                        switch (statusCode)
+                        {
+                            case HttpStatusCode.NotFound:
+                                message = "Verify that the provided FHIR service URL is the Service Base URL and does not contain any resources.";
+                                customEx = new InvalidFhirServiceException(message, nameof(FhirServiceErrorCode.ConfigurationError));
+                                break;
+                            case HttpStatusCode.Unauthorized:
+                                message = "Verify that the provided FHIR service's 'FHIR Data Writer' role has been assigned to the applicable Azure Active Directory security principal or managed identity.";
+                                customEx = new UnauthorizedAccessFhirServiceException(message, nameof(FhirServiceErrorCode.AuthorizationError));
+                                break;
+                            default:
+                                logger.LogMetric(FhirClientMetrics.HandledException($"{_errorType}{statusCode}", ErrorSeverity.Critical), 1);
+                                return;
+                        }
+
+                        _exceptionTelemetryProcessor.LogExceptionAndMetric(customEx, logger);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Exception e = ex is AggregateException ? ex.InnerException : ex;
+                    string message;
+
+                    switch (e)
+                    {
+                        case InvalidOperationException _:
+                            message = "Verify that the provided FHIR service URL is an absolute URL.";
+                            break;
+                        case HttpRequestException _:
+                            message = "Verify that the provided FHIR service URL exists.";
+                            break;
+                        default:
+                            string errorName = e != null ? e.GetType().Name : string.Empty;
+                            logger.LogMetric(FhirClientMetrics.HandledException($"{_errorType}{errorName}", ErrorSeverity.Critical), 1);
+                            return;
+                    }
+
+                    var customEx = new InvalidFhirServiceException(message, e, nameof(FhirServiceErrorCode.ConfigurationError));
+                    _exceptionTelemetryProcessor.LogExceptionAndMetric(customEx, logger);
+                }
+            }
+        }
+
+        private static void ValidateFhirService(FhirClient fhirClient, ITelemetryLogger logger)
+        {
+            try
+            {
+                var capabilityStatement = fhirClient.CapabilityStatement(SummaryType.Count);
+                if (capabilityStatement == null || capabilityStatement.FhirVersion == null)
+                {
+                    logger.LogMetric(FhirClientMetrics.HandledException($"{_errorType}", ErrorSeverity.Critical), 1);
+                }
+            }
+            catch (Exception ex)
+            {
+                var message = "Verify that the provided URL is for the FHIR service.";
+                var customEx = new InvalidFhirServiceException(message, ex, nameof(FhirServiceErrorCode.ConfigurationError));
+                _exceptionTelemetryProcessor.LogExceptionAndMetric(customEx, logger);
+            }
         }
 
         private class BearerTokenAuthorizationMessageHandler : HttpClientHandler
@@ -119,13 +201,13 @@ namespace Microsoft.Health.Extensions.Fhir
                 {
                     var statusDescription = response.ReasonPhrase.Replace(" ", string.Empty);
 
-                    if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+                    if (response.StatusCode == HttpStatusCode.TooManyRequests)
                     {
-                        Logger.LogMetric(FhirClientMetrics.HandledException($"FhirServerError{statusDescription}", ErrorSeverity.Informational, ConnectorOperation.FHIRConversion), 1);
+                        Logger.LogMetric(FhirClientMetrics.HandledException($"{_errorType}{statusDescription}", ErrorSeverity.Informational), 1);
                     }
                     else
                     {
-                        Logger.LogMetric(FhirClientMetrics.HandledException($"FhirServerError{statusDescription}", ErrorSeverity.Critical, ConnectorOperation.FHIRConversion), 1);
+                        Logger.LogMetric(FhirClientMetrics.HandledException($"{_errorType}{statusDescription}", ErrorSeverity.Critical), 1);
                     }
                 }
 
