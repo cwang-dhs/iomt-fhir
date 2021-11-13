@@ -5,6 +5,7 @@
 
 using System;
 using Microsoft.Health.Common.Telemetry;
+using Microsoft.Health.Common.Telemetry.Exceptions;
 
 namespace Microsoft.Health.Extensions.Fhir.Telemetry.Exceptions
 {
