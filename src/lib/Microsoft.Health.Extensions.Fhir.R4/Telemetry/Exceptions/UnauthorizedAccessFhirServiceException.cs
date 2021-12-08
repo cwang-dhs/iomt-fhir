@@ -29,17 +29,8 @@ namespace Microsoft.Health.Extensions.Fhir.Telemetry.Exceptions
 
         public UnauthorizedAccessFhirServiceException(
             string message,
-            string errorName)
-            : this(
-                  message,
-                  new Exception(),
-                  errorName)
-        {
-        }
-
-        public UnauthorizedAccessFhirServiceException(
-            string message,
             Exception innerException,
+            string helpLink,
             string errorName)
             : base(
                   message,
@@ -47,6 +38,7 @@ namespace Microsoft.Health.Extensions.Fhir.Telemetry.Exceptions
                   name: $"{_errorType}{errorName}",
                   operation: ConnectorOperation.FHIRConversion)
         {
+            HelpLink = helpLink;
         }
 
         public override string ErrType => _errorType;

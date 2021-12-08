@@ -29,16 +29,6 @@ namespace Microsoft.Health.Extensions.Fhir.Telemetry.Exceptions
 
         public InvalidFhirServiceException(
             string message,
-            string errorName)
-            : this(
-                  message,
-                  new Exception(),
-                  errorName)
-        {
-        }
-
-        public InvalidFhirServiceException(
-            string message,
             Exception innerException,
             string errorName)
             : base(
